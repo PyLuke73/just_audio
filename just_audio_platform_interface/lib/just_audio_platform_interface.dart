@@ -84,6 +84,13 @@ abstract class AudioPlayerPlatform {
   Stream<Map<dynamic, dynamic>> get stereoLevelsMessageStream =>
       const Stream<Map<dynamic, dynamic>>.empty();
 
+  /// A broadcast stream of the raw mono waveform (256 samples, -1..1),
+  /// resampled from the same PCM tap as [stereoLevelsMessageStream].
+  /// Android only — empty on platforms without an implementation. Each
+  /// event is a `Map` with a `samples` entry (`List<double>`).
+  Stream<Map<dynamic, dynamic>> get waveformMessageStream =>
+      const Stream<Map<dynamic, dynamic>>.empty();
+
   /// Loads an audio source.
   Future<LoadResponse> load(LoadRequest request) {
     throw UnimplementedError("load() has not been implemented.");

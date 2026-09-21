@@ -108,6 +108,10 @@ class AudioPlayer {
   /// platform implementation. Same lifecycle as [_playerDataSubscription].
   StreamSubscription<Map<dynamic, dynamic>>? _stereoLevelsSubscription;
 
+  /// The subscription to the waveform event channel of the current platform
+  /// implementation. Same lifecycle as [_playerDataSubscription].
+  StreamSubscription<Map<dynamic, dynamic>>? _waveformSubscription;
+
   StreamSubscription<AndroidAudioAttributes>?
       _androidAudioAttributesSubscription;
   StreamSubscription<void>? _becomingNoisyEventSubscription;
@@ -146,6 +150,8 @@ class AudioPlayer {
   final _stereoLevelsSubject =
       BehaviorSubject<({double left, double right})>.seeded(
           (left: 0.0, right: 0.0));
+  final _waveformSubject =
+      BehaviorSubject<List<double>>.seeded(const <double>[]);
   final _errorSubject = PublishSubject<PlayerException>();
 
   // independent streams
@@ -650,6 +656,13 @@ class AudioPlayer {
   /// silent value. Intended for VU-meter-style visualizations.
   Stream<({double left, double right})> get stereoLevelsStream =>
       _stereoLevelsSubject.stream;
+
+  /// Broadcasts the raw mono waveform (256 samples, -1..1) backing
+  /// [stereoLevelsStream] — same PCM tap, resampled to a fixed-size buffer.
+  /// Android only; empty list seeded, never updated on other platforms.
+  /// Intended for oscilloscope-style visualizations and, since the sample
+  /// count is a power of 2, as direct FFT input.
+  Stream<List<double>> get waveformStream => _waveformSubject.stream;
 
   /// A stream of errors broadcast by the player.
   Stream<PlayerException> get errorStream => _errorSubject.stream;
@@ -1441,6 +1454,7 @@ class AudioPlayer {
       _proxy.stop();
       await _playerDataSubscription?.cancel();
       await _stereoLevelsSubscription?.cancel();
+      await _waveformSubscription?.cancel();
       await _playbackEventSubscription?.cancel();
       await _androidAudioAttributesSubscription?.cancel();
       await _becomingNoisyEventSubscription?.cancel();
@@ -1467,6 +1481,7 @@ class AudioPlayer {
       await _icyMetadataSubject.close();
       await _androidAudioSessionIdSubject.close();
       await _stereoLevelsSubject.close();
+      await _waveformSubject.close();
       await _errorSubject.close();
       await _playerStateSubject.close();
       await _skipSilenceEnabledSubject.close();
@@ -1577,6 +1592,14 @@ class AudioPlayer {
       }, onDone: () {
         _stereoLevelsSubscription = null;
       });
+      _waveformSubscription = platform.waveformMessageStream.listen((event) {
+        final samples = event['samples'] as List<dynamic>?;
+        if (samples != null) {
+          _waveformSubject.add(samples.cast<double>());
+        }
+      }, onDone: () {
+        _waveformSubscription = null;
+      });
       _playbackEventSubscription =
           platform.playbackEventMessageStream.listen((message) {
         var duration = message.duration;
@@ -1653,6 +1676,9 @@ class AudioPlayer {
         }
         if (_stereoLevelsSubscription != null) {
           await _stereoLevelsSubscription!.cancel();
+        }
+        if (_waveformSubscription != null) {
+          await _waveformSubscription!.cancel();
         }
 
         if (!force) {

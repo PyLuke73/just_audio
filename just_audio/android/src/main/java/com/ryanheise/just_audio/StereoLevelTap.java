@@ -10,7 +10,9 @@ import io.flutter.plugin.common.BinaryMessenger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.ShortBuffer;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -19,9 +21,16 @@ import java.util.Map;
  * {@code Visualizer}, che su questo device forza un downmix mono, qui i due
  * canali restano separati fino al calcolo del livello.
  *
- * Calcola un RMS lineare (0..1) per canale su finestre di ~33ms (~30Hz) e lo
- * pubblica su un {@link EventChannel} Dart — nessuna UI ancora collegata a
- * questo checkpoint, solo verifica via log dei valori emessi.
+ * Emette due cose per finestra di ~33ms (~30Hz), sullo stesso ritmo:
+ * <ul>
+ *   <li>RMS lineare (0..1) per canale (VU meter) — evento su
+ *       {@code stereo_levels.<id>};
+ *   <li>una forma d'onda mono (media L+R) ricampionata a
+ *       {@link #WAVEFORM_POINTS} punti fissi — evento su
+ *       {@code waveform.<id>}, usata lato Dart sia per un oscilloscopio sia
+ *       come input per una FFT (calcolata in Dart, non qui: {@code
+ *       WAVEFORM_POINTS} è già una potenza di 2 apposta).
+ * </ul>
  *
  * Supporta solo PCM 16 bit stereo per ora (il formato osservato nella
  * pipeline di just_audio per contenuti mp3/flac standard): altri formati
@@ -33,8 +42,18 @@ public class StereoLevelTap implements TeeAudioProcessor.AudioBufferSink {
     private static final String TAG = "StereoLevelTap";
     private static final long EMIT_INTERVAL_MS = 33;
     private static final long LOG_INTERVAL_MS = 1000;
+    // Potenza di 2: comoda per una FFT lato Dart sullo stesso buffer, anche
+    // se questa classe non la calcola. Cap generoso sull'accumulatore
+    // grezzo (~185ms a 44.1kHz) — non dovrebbe mai saturare entro una
+    // finestra di emissione di 33ms, il guard in handleBuffer scarta
+    // l'eccedenza invece di andare in overflow se mai succedesse.
+    private static final int WAVEFORM_POINTS = 256;
+    private static final int WAVEFORM_ACCUM_CAP = 8192;
 
     private final BetterEventChannel levelEventChannel;
+    private final BetterEventChannel waveformEventChannel;
+    private final float[] waveformAccum = new float[WAVEFORM_ACCUM_CAP];
+    private int waveformAccumCount = 0;
     // TeeAudioProcessor.AudioBufferSink chiama flush()/handleBuffer() sul
     // thread di playback di ExoPlayer, mai sul main thread — verificato su
     // device reale: chiamare EventSink.success() direttamente da lì lancia
@@ -55,6 +74,7 @@ public class StereoLevelTap implements TeeAudioProcessor.AudioBufferSink {
 
     public StereoLevelTap(BinaryMessenger messenger, String id) {
         levelEventChannel = new BetterEventChannel(messenger, "com.ryanheise.just_audio.stereo_levels." + id);
+        waveformEventChannel = new BetterEventChannel(messenger, "com.ryanheise.just_audio.waveform." + id);
     }
 
     @Override
@@ -80,6 +100,9 @@ public class StereoLevelTap implements TeeAudioProcessor.AudioBufferSink {
             double right = shorts.get(i * 2 + 1) / 32768.0;
             sumLeftSquares += left * left;
             sumRightSquares += right * right;
+            if (waveformAccumCount < WAVEFORM_ACCUM_CAP) {
+                waveformAccum[waveformAccumCount++] = (float) ((left + right) / 2.0);
+            }
         }
         sampleCount += frameCount;
 
@@ -106,10 +129,48 @@ public class StereoLevelTap implements TeeAudioProcessor.AudioBufferSink {
                 lastLogAtMs = now;
                 Log.d(TAG, "levels: left=" + rmsLeft + " right=" + rmsRight);
             }
+
+            if (waveformAccumCount > 0) {
+                final List<Double> waveform = resampleWaveform();
+                waveformAccumCount = 0;
+                final Map<String, Object> waveformEvent = new HashMap<String, Object>();
+                waveformEvent.put("samples", waveform);
+                mainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        waveformEventChannel.success(waveformEvent);
+                    }
+                });
+            }
         }
+    }
+
+    /**
+     * Ricampiona {@link #waveformAccum} (primi {@link #waveformAccumCount}
+     * campioni validi) a esattamente {@link #WAVEFORM_POINTS} punti, per
+     * media a bucket (non semplice decimazione): più fedele alla forma
+     * d'onda reale, evita di scartare picchi che cadrebbero tra due
+     * campioni scelti a caso.
+     */
+    private List<Double> resampleWaveform() {
+        List<Double> result = new ArrayList<Double>(WAVEFORM_POINTS);
+        for (int i = 0; i < WAVEFORM_POINTS; i++) {
+            int start = (int) ((long) i * waveformAccumCount / WAVEFORM_POINTS);
+            int end = (int) ((long) (i + 1) * waveformAccumCount / WAVEFORM_POINTS);
+            if (end <= start) end = Math.min(start + 1, waveformAccumCount);
+            double sum = 0;
+            int n = 0;
+            for (int j = start; j < end; j++) {
+                sum += waveformAccum[j];
+                n++;
+            }
+            result.add(n > 0 ? sum / n : 0.0);
+        }
+        return result;
     }
 
     public void dispose() {
         levelEventChannel.endOfStream();
+        waveformEventChannel.endOfStream();
     }
 }

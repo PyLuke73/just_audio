@@ -6,6 +6,10 @@
   this keeps left/right channels separate (no forced mono downmix) and
   works on output paths where `Visualizer` cannot attach. Intended for
   stereo VU-meter-style visualizations. Empty stream on other platforms.
+* Add `waveformStream` (Android): the mono waveform (256 samples, -1..1)
+  backing `stereoLevelsStream`, from the same tap — for oscilloscope-style
+  visualizations and as direct FFT input (256 is a power of 2). Empty list
+  seeded on other platforms.
 
 ## 0.10.6
 
