@@ -104,6 +104,10 @@ class AudioPlayer {
   /// subscribe to the new platform's events.
   StreamSubscription<PlayerDataMessage>? _playerDataSubscription;
 
+  /// The subscription to the stereo levels event channel of the current
+  /// platform implementation. Same lifecycle as [_playerDataSubscription].
+  StreamSubscription<Map<dynamic, dynamic>>? _stereoLevelsSubscription;
+
   StreamSubscription<AndroidAudioAttributes>?
       _androidAudioAttributesSubscription;
   StreamSubscription<void>? _becomingNoisyEventSubscription;
@@ -139,6 +143,9 @@ class AudioPlayer {
       BehaviorSubject<Duration>.seeded(Duration.zero);
   final _icyMetadataSubject = BehaviorSubject<IcyMetadata?>.seeded(null);
   final _androidAudioSessionIdSubject = BehaviorSubject<int?>.seeded(null);
+  final _stereoLevelsSubject =
+      BehaviorSubject<({double left, double right})>.seeded(
+          (left: 0.0, right: 0.0));
   final _errorSubject = PublishSubject<PlayerException>();
 
   // independent streams
@@ -635,6 +642,14 @@ class AudioPlayer {
   /// Broadcasts the current Android AudioSession ID or `null` if not set.
   Stream<int?> get androidAudioSessionIdStream =>
       _androidAudioSessionIdSubject.stream;
+
+  /// Broadcasts real-time stereo L/R levels (linear RMS amplitude, 0..1),
+  /// tapped from the decoded PCM before it reaches the audio sink — reflects
+  /// the source content, not any downstream volume/effects processing.
+  /// Android only; on other platforms this never emits past the seeded
+  /// silent value. Intended for VU-meter-style visualizations.
+  Stream<({double left, double right})> get stereoLevelsStream =>
+      _stereoLevelsSubject.stream;
 
   /// A stream of errors broadcast by the player.
   Stream<PlayerException> get errorStream => _errorSubject.stream;
@@ -1425,6 +1440,7 @@ class AudioPlayer {
       _audioSources.clear();
       _proxy.stop();
       await _playerDataSubscription?.cancel();
+      await _stereoLevelsSubscription?.cancel();
       await _playbackEventSubscription?.cancel();
       await _androidAudioAttributesSubscription?.cancel();
       await _becomingNoisyEventSubscription?.cancel();
@@ -1450,6 +1466,7 @@ class AudioPlayer {
       await _bufferedPositionSubject.close();
       await _icyMetadataSubject.close();
       await _androidAudioSessionIdSubject.close();
+      await _stereoLevelsSubject.close();
       await _errorSubject.close();
       await _playerStateSubject.close();
       await _skipSilenceEnabledSubject.close();
@@ -1550,6 +1567,16 @@ class AudioPlayer {
       }, onDone: () {
         _playerDataSubscription = null;
       });
+      _stereoLevelsSubscription =
+          platform.stereoLevelsMessageStream.listen((event) {
+        final left = event['left'] as double?;
+        final right = event['right'] as double?;
+        if (left != null && right != null) {
+          _stereoLevelsSubject.add((left: left, right: right));
+        }
+      }, onDone: () {
+        _stereoLevelsSubscription = null;
+      });
       _playbackEventSubscription =
           platform.playbackEventMessageStream.listen((message) {
         var duration = message.duration;
@@ -1623,6 +1650,9 @@ class AudioPlayer {
         }
         if (_playerDataSubscription != null) {
           await _playerDataSubscription!.cancel();
+        }
+        if (_stereoLevelsSubscription != null) {
+          await _stereoLevelsSubscription!.cancel();
         }
 
         if (!force) {

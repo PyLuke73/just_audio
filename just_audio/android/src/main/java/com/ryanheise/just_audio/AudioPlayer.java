@@ -29,6 +29,14 @@ import androidx.media3.common.AudioAttributes;
 import androidx.media3.exoplayer.NoSampleRenderer;
 import androidx.media3.exoplayer.Renderer;
 import androidx.media3.exoplayer.RenderersFactory;
+import androidx.media3.exoplayer.audio.AudioRendererEventListener;
+import androidx.media3.exoplayer.audio.AudioSink;
+import androidx.media3.exoplayer.audio.DefaultAudioSink;
+import androidx.media3.exoplayer.audio.TeeAudioProcessor;
+import androidx.media3.exoplayer.text.TextOutput;
+import androidx.media3.exoplayer.video.VideoRendererEventListener;
+import androidx.media3.common.audio.AudioProcessor;
+import androidx.media3.common.util.UnstableApi;
 import androidx.media3.extractor.DefaultExtractorsFactory;
 import androidx.media3.common.Metadata;
 import androidx.media3.exoplayer.metadata.MetadataOutput;
@@ -106,6 +114,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     private Map<String, Object> pendingPlaybackEvent;
 
     private ExoPlayer player;
+    private final StereoLevelTap stereoLevelTap;
     private Integer audioSessionId;
     private Integer errorCode;
     private String errorMessage;
@@ -176,6 +185,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         methodChannel.setMethodCallHandler(this);
         eventChannel = new BetterEventChannel(messenger, "com.ryanheise.just_audio.events." + id);
         dataEventChannel = new BetterEventChannel(messenger, "com.ryanheise.just_audio.data." + id);
+        stereoLevelTap = new StereoLevelTap(messenger, id);
         processingState = ProcessingState.idle;
         if (audioLoadConfiguration != null) {
             Map<?, ?> loadControlMap = (Map<?, ?>)audioLoadConfiguration.get("androidLoadControl");
@@ -410,7 +420,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 break;
 
             case ExoPlaybackException.TYPE_UNEXPECTED:
-                Log.e(TAG, "TYPE_UNEXPECTED: " + exoError.getUnexpectedException().getMessage());
+                Log.e(TAG, "TYPE_UNEXPECTED: " + exoError.getUnexpectedException().getMessage(), exoError.getUnexpectedException());
                 break;
 
             default:
@@ -774,14 +784,42 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         player.prepare();
     }
 
+    // @UnstableApi: TeeAudioProcessor (Media3) non fa parte dell'API stabile —
+    // vedi il commento sopra la RenderersFactory qui sotto per il motivo per cui
+    // serve comunque.
+    @UnstableApi
     private void ensurePlayerInitialized() {
         if (player == null) {
-            RenderersFactory renderersFactory = (eventHandler, videoListener, audioListener, textOutput, metadataOutput) -> {
-                Renderer[] defaultRenderers = new DefaultRenderersFactory(context)
-                    .createRenderers(eventHandler, videoListener, audioListener, textOutput, metadataOutput);
-                Renderer[] allRenderers = Arrays.copyOf(defaultRenderers, defaultRenderers.length + 1);
-                allRenderers[defaultRenderers.length] = new ObserverRenderer();
-                return allRenderers;
+            // Un DefaultRenderersFactory anonimo invece della semplice lambda di prima:
+            // serve per poter fare l'override di buildAudioSink() sotto, l'unico modo
+            // pubblico di Media3 per agganciare un AudioProcessor (qui un
+            // TeeAudioProcessor, per il tap PCM stereo) alla catena audio reale.
+            RenderersFactory renderersFactory = new DefaultRenderersFactory(context) {
+                @Override
+                protected AudioSink buildAudioSink(
+                    Context context, boolean enableFloatOutput, boolean enableAudioTrackPlaybackParams
+                ) {
+                    return new DefaultAudioSink.Builder(context)
+                        .setEnableFloatOutput(enableFloatOutput)
+                        .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                        .setAudioProcessors(new AudioProcessor[] { new TeeAudioProcessor(stereoLevelTap) })
+                        .build();
+                }
+
+                @Override
+                public Renderer[] createRenderers(
+                    Handler eventHandler,
+                    VideoRendererEventListener videoListener,
+                    AudioRendererEventListener audioListener,
+                    TextOutput textOutput,
+                    MetadataOutput metadataOutput
+                ) {
+                    Renderer[] defaultRenderers = super.createRenderers(
+                        eventHandler, videoListener, audioListener, textOutput, metadataOutput);
+                    Renderer[] allRenderers = Arrays.copyOf(defaultRenderers, defaultRenderers.length + 1);
+                    allRenderers[defaultRenderers.length] = new ObserverRenderer();
+                    return allRenderers;
+                }
             };
             ExoPlayer.Builder builder = new ExoPlayer.Builder(context, renderersFactory);
             builder.setUseLazyPreparation(useLazyPreparation);

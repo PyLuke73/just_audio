@@ -1,3 +1,12 @@
+## Unreleased
+
+* Add `stereoLevelsStream` (Android): real-time per-channel linear RMS
+  levels (0..1), tapped from the decoded PCM via a `TeeAudioProcessor` on
+  the real playback `AudioSink` — unlike `android.media.audiofx.Visualizer`,
+  this keeps left/right channels separate (no forced mono downmix) and
+  works on output paths where `Visualizer` cannot attach. Intended for
+  stereo VU-meter-style visualizations. Empty stream on other platforms.
+
 ## 0.10.6
 
 * Support AGP 9.

@@ -76,6 +76,14 @@ abstract class AudioPlayerPlatform {
   Stream<PlayerDataMessage> get playerDataMessageStream =>
       const Stream<PlayerDataMessage>.empty();
 
+  /// A broadcast stream of real-time stereo L/R levels (linear RMS, 0..1),
+  /// tapped from the decoded PCM via a `TeeAudioProcessor` on the real
+  /// audio sink (Android only — empty on platforms without an
+  /// implementation). Each event is a `Map` with `left`/`right` double
+  /// entries.
+  Stream<Map<dynamic, dynamic>> get stereoLevelsMessageStream =>
+      const Stream<Map<dynamic, dynamic>>.empty();
+
   /// Loads an audio source.
   Future<LoadResponse> load(LoadRequest request) {
     throw UnimplementedError("load() has not been implemented.");
