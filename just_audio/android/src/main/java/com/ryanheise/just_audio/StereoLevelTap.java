@@ -21,7 +21,10 @@ import java.util.Map;
  * {@code Visualizer}, che su questo device forza un downmix mono, qui i due
  * canali restano separati fino al calcolo del livello.
  *
- * Emette due cose per finestra di ~33ms (~30Hz), sullo stesso ritmo:
+ * Emette due cose, con ritmi indipendenti (vedi {@link #EMIT_INTERVAL_MS} e
+ * {@link #WAVEFORM_EMIT_INTERVAL_MS} — non uguali per scelta: il VU meter
+ * ha già uno smorzamento visivo lato Dart (animazione 120ms), l'oscilloscopio
+ * e la FFT no, quindi beneficiano di più di un ritmo nativo più alto):
  * <ul>
  *   <li>RMS lineare (0..1) per canale (VU meter) — evento su
  *       {@code stereo_levels.<id>};
@@ -40,7 +43,8 @@ import java.util.Map;
 @UnstableApi
 public class StereoLevelTap implements TeeAudioProcessor.AudioBufferSink {
     private static final String TAG = "StereoLevelTap";
-    private static final long EMIT_INTERVAL_MS = 33;
+    private static final long EMIT_INTERVAL_MS = 33; // VU meter, ~30Hz
+    private static final long WAVEFORM_EMIT_INTERVAL_MS = 20; // oscilloscopio/FFT, ~50Hz
     private static final long LOG_INTERVAL_MS = 1000;
     // Potenza di 2: comoda per una FFT lato Dart sullo stesso buffer, anche
     // se questa classe non la calcola. Cap generoso sull'accumulatore
@@ -70,6 +74,7 @@ public class StereoLevelTap implements TeeAudioProcessor.AudioBufferSink {
     private double sumRightSquares = 0;
     private long sampleCount = 0;
     private long lastEmitAtMs = 0;
+    private long lastWaveformEmitAtMs = 0;
     private long lastLogAtMs = 0;
 
     public StereoLevelTap(BinaryMessenger messenger, String id) {
@@ -129,19 +134,20 @@ public class StereoLevelTap implements TeeAudioProcessor.AudioBufferSink {
                 lastLogAtMs = now;
                 Log.d(TAG, "levels: left=" + rmsLeft + " right=" + rmsRight);
             }
+        }
 
-            if (waveformAccumCount > 0) {
-                final List<Double> waveform = resampleWaveform();
-                waveformAccumCount = 0;
-                final Map<String, Object> waveformEvent = new HashMap<String, Object>();
-                waveformEvent.put("samples", waveform);
-                mainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        waveformEventChannel.success(waveformEvent);
-                    }
-                });
-            }
+        if (waveformAccumCount > 0 && now - lastWaveformEmitAtMs >= WAVEFORM_EMIT_INTERVAL_MS) {
+            lastWaveformEmitAtMs = now;
+            final List<Double> waveform = resampleWaveform();
+            waveformAccumCount = 0;
+            final Map<String, Object> waveformEvent = new HashMap<String, Object>();
+            waveformEvent.put("samples", waveform);
+            mainHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    waveformEventChannel.success(waveformEvent);
+                }
+            });
         }
     }
 
