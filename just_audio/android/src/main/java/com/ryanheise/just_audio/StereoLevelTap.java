@@ -21,10 +21,10 @@ import java.util.Map;
  * {@code Visualizer}, che su questo device forza un downmix mono, qui i due
  * canali restano separati fino al calcolo del livello.
  *
- * Emette due cose, con ritmi indipendenti (vedi {@link #EMIT_INTERVAL_MS} e
- * {@link #WAVEFORM_EMIT_INTERVAL_MS} — non uguali per scelta: il VU meter
- * ha già uno smorzamento visivo lato Dart (animazione 120ms), l'oscilloscopio
- * e la FFT no, quindi beneficiano di più di un ritmo nativo più alto):
+ * Emette due cose, alla stessa cadenza (vedi {@link #EMIT_INTERVAL_MS} e
+ * {@link #WAVEFORM_EMIT_INTERVAL_MS}, tenute allineate su richiesta
+ * dell'utente — un ritmo più alto per l'oscilloscopio/FFT era stato provato
+ * ma risultava percepito come "troppo veloce" rispetto al VU meter):
  * <ul>
  *   <li>RMS lineare (0..1) per canale (VU meter) — evento su
  *       {@code stereo_levels.<id>};
@@ -44,7 +44,7 @@ import java.util.Map;
 public class StereoLevelTap implements TeeAudioProcessor.AudioBufferSink {
     private static final String TAG = "StereoLevelTap";
     private static final long EMIT_INTERVAL_MS = 33; // VU meter, ~30Hz
-    private static final long WAVEFORM_EMIT_INTERVAL_MS = 20; // oscilloscopio/FFT, ~50Hz
+    private static final long WAVEFORM_EMIT_INTERVAL_MS = 33; // oscilloscopio/FFT, allineato al VU meter (~30Hz)
     private static final long LOG_INTERVAL_MS = 1000;
     // Potenza di 2: comoda per una FFT lato Dart sullo stesso buffer, anche
     // se questa classe non la calcola. Cap generoso sull'accumulatore
